@@ -6,11 +6,11 @@
 #include <TinyGPSPlus.h>
 
 #define PIN_MQ135     34
-#define PIN_UV        35
+#define PIN_UV        36
 #define PIN_BAT       32
-#define PIN_DS18B20   4
-#define GPS_RX_PIN    16
-#define GPS_TX_PIN    17
+#define PIN_DS18B20   14
+#define GPS_RX_PIN    12
+#define GPS_TX_PIN    13
 
 GyverDS18Single ds(PIN_DS18B20);  // пин
 
