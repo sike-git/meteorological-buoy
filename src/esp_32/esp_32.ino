@@ -5,6 +5,7 @@
 #include <GyverDS18.h>
 #include <TinyGPSPlus.h>
 #include <math.h>
+#include <HTTPClient.h>
 
 #define PIN_MQ35 34
 #define PIN_UV 36
@@ -32,11 +33,17 @@ const unsigned long GPS_STREAM_TIMEOUT_MS = 5000;
 HardwareSerial SerialGPS(2);
 TinyGPSPlus gps;
 
-// ------------------- Web server (AP mode) -------------------
-WebServer server(80);
-const char* AP_SSID = "ESP32_SensorHub";
-const char* AP_PASS = "sensors123";
+// ------------------- Точка доступа (AP mode) -------------------
+const char* AP_SSID = "ESP32_SensorHub";  // <- добавил ;
+const char* AP_PASS = "Sensors123";       // <- добавил ;
 
+// ------------------- Wi-Fi клиент (для отправки данных) -------------------
+const char* CLIENT_SSID = "MGTS_GPON5_9AFE";
+const char* CLIENT_PASS = "e3dNtPX3";
+String GAS_URL = "https://script.google.com/macros/s/AKfycbyC89RstYtnxLuvwlhho538BsWKC6EevpA0xa749LBrEGVVwu4gIPKDLkORojkdPBDZ-A/exec";  
+
+// ------------------- Веб-сервер -------------------
+WebServer server(80);
 // ------------------- Последние данные -------------------
 float last_mq35_voltage = 0.0;
 float last_uv_voltage = 0.0;
@@ -62,6 +69,10 @@ String bat_status = "не проверен";
 String ds18b20_status = "не проверен";
 String gps_status = "не проверен";
 
+//--------------------Переменные для отправки данных--------------------
+bool wifi_client_connected = false; // статус поделючения
+unsigned long lastSendTime = 0; // время последней отправки
+const unsigned long SEND_INTERVAL_MS = 60000; // раз в минуту
 // ------------------- Утилиты -------------------
 float readADCVoltage(int pin) {
   int raw = analogRead(pin);
@@ -162,6 +173,77 @@ bool checkGPSSensor(String &statusText) {
   return true;
 }
 
+// ----------- Подключение к WIFI -----------
+void connectToWiFiClient() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  
+  Serial.print("Подключение к Wi-Fi сети: ");
+  Serial.println(CLIENT_SSID);
+  
+  WiFi.begin(CLIENT_SSID, CLIENT_PASS);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    wifi_client_connected = true;
+    Serial.println("\n Wi-Fi клиент подключен!");
+    Serial.print("IP адрес: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    wifi_client_connected = false;
+    Serial.println("\n❌ Не удалось подключиться к Wi-Fi сети");
+  }
+}
+// ----------- Отправка в Google Sheets -----------
+bool sendDataToGoogleSheets() {
+  if (!wifi_client_connected) {
+    Serial.println("Пропускаем отправку: Wi-Fi клиент не подключен");
+    return false;
+  }
+  
+  HTTPClient http;
+  
+  String url = GAS_URL + 
+               "?temp=" + (ds18b20_ok && !isnan(last_temp_c) ? String(last_temp_c, 2) : "null") +
+               "&mq35=" + (mq35_ok ? String(last_mq35_voltage, 3) : "null") +
+               "&uv=" + (uv_ok ? String(last_uv_voltage, 3) : "null") +
+               "&bat=" + (bat_ok ? String(last_bat_voltage, 3) : "null") +
+               "&lat=" + (gps_stream_ok && gps_has_fix ? String(last_lat, 6) : "null") +
+               "&lng=" + (gps_stream_ok && gps_has_fix ? String(last_lng, 6) : "null");
+  
+  Serial.println("📤 Отправка данных в Google Sheets...");
+  
+  http.begin(url);
+  http.setTimeout(5000);
+  
+  int httpCode = http.GET();
+  bool success = false;
+  
+  if (httpCode > 0) {
+    if (httpCode == 200) {
+      String response = http.getString();
+      if (response == "OK") {
+        Serial.println("✅ Данные успешно отправлены");
+        success = true;
+      } else {
+        Serial.println("⚠ Получен ответ: " + response);
+        success = true;
+      }
+    } else {
+      Serial.printf("❌ Ошибка HTTP: %d\n", httpCode);
+    }
+  } else {
+    Serial.printf("❌ Ошибка отправки: %s\n", http.errorToString(httpCode).c_str());
+  }
+  
+  http.end();
+  return success;
+}
 void printStatusLine(const char* name, bool ok, const String& statusText) {
   Serial.print(name);
   Serial.print(" -> ");
@@ -200,6 +282,8 @@ String sensorsToHTML() {
   } else {
     s += String(last_lat, 6) + ", " + String(last_lng, 6);
   }
+  s += "<tr><td>WiFi Client</td><td>" + String(wifi_client_connected ? "подключен" : "отключен") + "</td><td>";
+  s += wifi_client_connected ? WiFi.localIP().toString() : "нет подключения";
   s += "</td></tr>";
   
   s += "</table>";
@@ -239,7 +323,8 @@ String sensorsToJSON() {
   j += "\"gps_status\": \"" + gps_status + "\",";
   j += "\"gps_fix\": " + String(gps_has_fix ? "true" : "false") + ",";
   j += "\"latitude\": " + (gps_stream_ok && gps_has_fix ? String(last_lat, 6) : String("null")) + ",";
-  j += "\"longitude\": " + (gps_stream_ok && gps_has_fix ? String(last_lng, 6) : String("null"));
+  j += "\"longitude\": " + (gps_stream_ok && gps_has_fix ? String(last_lng, 6) : String("null")) + ",";
+  j += "\"wifi_connected\": " + String(wifi_client_connected ? "true" : "false");
   
   j += "}";
   return j;
@@ -307,6 +392,8 @@ void printCycleDiagnosticsAndData() {
     Serial.printf("GPS: lat=%.6f, lng=%.6f, спутники=%d, скорость=%.2f км/ч\n",
                   last_lat, last_lng, gps.satellites.value(), gps.speed.kmph());
   }
+  Serial.print("Wi-Fi клиент: ");
+  Serial.println(wifi_client_connected ? "подключен" : "отключен");
   
   Serial.println("=====================================");
 }
@@ -343,9 +430,10 @@ void setup() {
   }
   
   printStartupDiagnostics();
+  connectToWiFiClient();
   
   // Wi-Fi AP
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
   bool apOK = WiFi.softAP(AP_SSID, AP_PASS);
   if (apOK) {
     IPAddress IP = WiFi.softAPIP();
@@ -363,6 +451,8 @@ void setup() {
   Serial.println("Веб-сервер запущен.");
   
   lastSample = millis() - SAMPLE_INTERVAL_MS;
+
+  lastSendTime = millis();
 }
 
 void loop() {
@@ -441,4 +531,22 @@ void loop() {
     
     printCycleDiagnosticsAndData();
   }
+// -------------- Периодическая отправка данных -------------- 
+  if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
+    lastSendTime = millis();
+    
+    // Проверяем подключение к Wi-Fi
+    if (WiFi.status() != WL_CONNECTED) {
+      wifi_client_connected = false;
+      Serial.println("Потеряно соединение с Wi-Fi");
+      connectToWiFiClient();  // переподключаемся
+    } else {
+      wifi_client_connected = true;
+    }
+    
+    // Отправляем данные
+    sendDataToGoogleSheets();
+  }
+  
+  delay(10);
 }
