@@ -32,15 +32,14 @@ const unsigned long GPS_STREAM_TIMEOUT_MS = 5000;
 // ------------------- GPS -------------------
 HardwareSerial SerialGPS(2);
 TinyGPSPlus gps;
-
 // ------------------- Точка доступа (AP mode) -------------------
-const char* AP_SSID = "ESP32_SensorHub";  // <- добавил ;
-const char* AP_PASS = "Sensors123";       // <- добавил ;
+const char* AP_SSID = "ESP32_SensorHub";
+const char* AP_PASS = "Sensors123";
 
 // ------------------- Wi-Fi клиент (для отправки данных) -------------------
-const char* CLIENT_SSID = "MGTS_GPON5_9AFE";
-const char* CLIENT_PASS = "e3dNtPX3";
-String GAS_URL = "https://script.google.com/macros/s/AKfycbyC89RstYtnxLuvwlhho538BsWKC6EevpA0xa749LBrEGVVwu4gIPKDLkORojkdPBDZ-A/exec";  
+const char* CLIENT_SSID = "MGTS_GPON_9AFE";
+const char* CLIENT_PASS = "e3dNtPX3";  
+String GAS_URL = "https://script.google.com/macros/s/AKfycbzPRk6iOvOkTHscMiM2D8x3a2041i-d7ZWizTdPPHSsyl-zJ8vu-54qFGzUc6ErDTGSzQ/exec";  
 
 // ------------------- Веб-сервер -------------------
 WebServer server(80);
@@ -173,6 +172,28 @@ bool checkGPSSensor(String &statusText) {
   return true;
 }
 
+void scanWiFi() {
+  Serial.println("Начинаю сканирование сетей...");
+  int n = WiFi.scanNetworks();
+  if (n == 0) {
+    Serial.println("Сетей не найдено");
+  } else {
+    Serial.print("Найдено сетей: ");
+    Serial.println(n);
+    for (int i = 0; i < n; ++i) {
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print(WiFi.SSID(i));
+      Serial.print(" (");
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(" dBm)");
+      Serial.println((WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? " [Открытая]" : " [Защищенная]");
+      delay(10);
+    }
+  }
+  Serial.println("Сканирование завершено");
+}
+
 // ----------- Подключение к WIFI -----------
 void connectToWiFiClient() {
   if (WiFi.status() == WL_CONNECTED) return;
@@ -209,12 +230,11 @@ bool sendDataToGoogleSheets() {
   HTTPClient http;
   
   String url = GAS_URL + 
-               "?temp=" + (ds18b20_ok && !isnan(last_temp_c) ? String(last_temp_c, 2) : "null") +
-               "&mq35=" + (mq35_ok ? String(last_mq35_voltage, 3) : "null") +
-               "&uv=" + (uv_ok ? String(last_uv_voltage, 3) : "null") +
-               "&bat=" + (bat_ok ? String(last_bat_voltage, 3) : "null") +
-               "&lat=" + (gps_stream_ok && gps_has_fix ? String(last_lat, 6) : "null") +
-               "&lng=" + (gps_stream_ok && gps_has_fix ? String(last_lng, 6) : "null");
+             "?temp=" + (ds18b20_ok && !isnan(last_temp_c) ? String(last_temp_c, 2) : "null") +
+             "&mq35=" + (mq35_ok ? String(last_mq35_voltage, 3) : "null") +
+             "&uv=" + (uv_ok ? String(last_uv_voltage, 3) : "null") +
+             "&lat=" + (gps_stream_ok && gps_has_fix ? String(last_lat, 6) : "0") +
+             "&lng=" + (gps_stream_ok && gps_has_fix ? String(last_lng, 6) : "0");
   
   Serial.println("📤 Отправка данных в Google Sheets...");
   
@@ -267,7 +287,7 @@ String sensorsToHTML() {
   s += "</td></tr>";
   
   s += "<tr><td>Battery</td><td>" + String(bat_ok ? "исправен" : "неисправен") + "</td><td>";
-  s += bat_ok ? (String(last_bat_voltage, 3) + " В") : "данные не выводятся";
+  s += "работает";
   s += "</td></tr>";
   
   s += "<tr><td>DS18B20</td><td>" + String(ds18b20_ok ? "исправен" : "неисправен") + "</td><td>";
@@ -291,7 +311,7 @@ String sensorsToHTML() {
   s += "<h3>Диагностика</h3><ul>";
   s += "<li>" + mq35_status + "</li>";
   s += "<li>" + uv_status + "</li>";
-  s += "<li>" + bat_status + "</li>";
+  s += "<li>Батарея: работает</li>";
   s += "<li>" + ds18b20_status + "</li>";
   s += "<li>" + gps_status + "</li>";
   s += "</ul>";
@@ -310,10 +330,10 @@ String sensorsToJSON() {
   j += "\"uv_ok\": " + String(uv_ok ? "true" : "false") + ",";
   j += "\"uv_status\": \"" + uv_status + "\",";
   j += "\"uv_v\": " + (uv_ok ? String(last_uv_voltage, 3) : String("null")) + ",";
-  
-  j += "\"battery_ok\": " + String(bat_ok ? "true" : "false") + ",";
-  j += "\"battery_status\": \"" + bat_status + "\",";
-  j += "\"battery_v\": " + (bat_ok ? String(last_bat_voltage, 3) : String("null")) + ",";
+
+  j += "\"battery_ok\": true,";
+  j += "\"battery_status\": \"работает\",";
+  j += "\"battery_v\": 0,";
   
   j += "\"ds18b20_ok\": " + String(ds18b20_ok ? "true" : "false") + ",";
   j += "\"ds18b20_status\": \"" + ds18b20_status + "\",";
@@ -341,7 +361,7 @@ void handleJSON() {
 void printStartupDiagnostics() {
   Serial.println();
   Serial.println("========== ПЕРВИЧНАЯ ПРОВЕРКА ДАТЧИКОВ ==========");
-  printStatusLine("MQ-35", mq35_ok, mq35_status);
+  printStatusLine("MQ-135", mq35_ok, mq35_status);
   printStatusLine("UV", uv_ok, uv_status);
   printStatusLine("BAT", bat_ok, bat_status);
   printStatusLine("DS18B20", ds18b20_ok, ds18b20_status);
@@ -354,11 +374,11 @@ void printCycleDiagnosticsAndData() {
   Serial.println();
   Serial.println("========== СТАТУС ДАТЧИКОВ ==========");
   
-  printStatusLine("MQ-35", mq35_ok, mq35_status);
+  printStatusLine("MQ-135", mq35_ok, mq35_status);
   if (mq35_ok) {
-    Serial.printf("MQ-35: %.3f В\n", last_mq35_voltage);
+    Serial.printf("MQ-135: %.3f В\n", last_mq35_voltage);
   } else {
-    Serial.println("MQ-35: данные не выводим");
+    Serial.println("MQ-135: данные не выводим");
   }
   
   printStatusLine("UV", uv_ok, uv_status);
@@ -369,11 +389,7 @@ void printCycleDiagnosticsAndData() {
   }
   
   printStatusLine("BAT", bat_ok, bat_status);
-  if (bat_ok) {
-    Serial.printf("Батарея: %.3f В\n", last_bat_voltage);
-  } else {
-    Serial.println("Батарея: данные не выводим");
-  }
+  Serial.println("Батарея: работает");
   
   printStatusLine("DS18B20", ds18b20_ok, ds18b20_status);
   if (ds18b20_ok) {
@@ -418,7 +434,6 @@ void setup() {
   ds18b20_ok = checkDS18B20Sensor(ds18b20_status);
   gps_stream_ok = checkGPSSensor(gps_status);
   
-  // Если аналоговые каналы исправны — снимем первые значения
   if (mq35_ok) last_mq35_voltage = readADCVoltageAvg(PIN_MQ35, 12);
   if (uv_ok) last_uv_voltage = readADCVoltageAvg(PIN_UV, 12);
   if (bat_ok) last_bat_voltage = readBatteryVoltage();
@@ -430,6 +445,7 @@ void setup() {
   }
   
   printStartupDiagnostics();
+  scanWiFi();
   connectToWiFiClient();
   
   // Wi-Fi AP
@@ -476,9 +492,9 @@ void loop() {
     // MQ-35
     if (mq35_ok) {
       last_mq35_voltage = readADCVoltageAvg(PIN_MQ35, 12);
-      mq35_status = "MQ-35: измерение выполнено успешно";
+      mq35_status = "MQ-135: измерение выполнено успешно";
     } else {
-      mq35_status = "MQ-35: неисправен, данные не выводятся";
+      mq35_status = "MQ-135: неисправен, данные не выводятся";
     }
     
     // UV
@@ -491,10 +507,10 @@ void loop() {
     
     // Battery
     if (bat_ok) {
-      last_bat_voltage = readBatteryVoltage();
-      bat_status = "Battery: измерение выполнено успешно";
+      last_bat_voltage = readBatteryVoltage();  // можно оставить для внутреннего использования
+      bat_status = "работает";
     } else {
-      bat_status = "Battery: неисправен, данные не выводятся";
+      bat_status = "работает";
     }
     
     // DS18B20

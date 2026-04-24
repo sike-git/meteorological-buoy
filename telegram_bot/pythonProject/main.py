@@ -3,16 +3,26 @@ from telebot import types
 import os
 from dotenv import load_dotenv
 import requests
-from telebot import apihelper
+from openai import OpenAI
+from datetime import datetime
 
-WORKER_URL = "https://telegram-proxy.tyreseonai.workers.dev"
-apihelper.API_URL = f"{WORKER_URL}/bot{{token}}/"
-apihelper.FILE_URL = f"{WORKER_URL}/file/bot{{token}}/"
+
+def fix_time(timestamp_str):
+    if not timestamp_str or timestamp_str == 'N/A':
+        return 'N/A'
+    try:
+        if 'T' in timestamp_str:
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            return dt.strftime('%d.%m.%Y %H:%M:%S')
+        return timestamp_str
+    except:
+        return timestamp_str
+
 
 load_dotenv()
 
 bot = telebot.TeleBot(os.getenv("BOT_TOKEN"))
-deepseek_api = os.getenv("DEEPSEEK_API")
+ai_api = os.getenv("AI_API")
 google_table_url = os.getenv("GOOGLE_URL")
 
 
@@ -44,10 +54,10 @@ def get_latest_data():
 
 
 def get_ai_verdict(data):
+
     temp = data.get('Temperature', '—')
-    mq35 = data.get('MQ35', '—')
+    mq135 = data.get('MQ135', '—')
     uv = data.get('UV', '—')
-    battery = data.get('Battery', '—')
     lat = data.get('Latitude', '—')
     lng = data.get('Longitude', '—')
     timestamp = data.get('Timestamp', '—')
@@ -55,117 +65,89 @@ def get_ai_verdict(data):
     prompt = f"""
     Ты — эксперт по анализу данных с IoT-датчиков, метеоролог и специалист по качеству окружающей среды.
 
-    Твоя задача — дать сжатый, точный и практичный анализ данных с буя.
-    Ответ должен быть строго по формату, без отклонений.
+Твоя задача — дать сжатый, точный и практичный анализ данных с буя.
+Ответ должен быть строго по формату, без отклонений.
 
-    ---
+---
 
-    Входные данные (сырые показания):
-    Температура: {temp} °C
-    MQ-35 (условные единицы): {mq35}
-    УФ-индекс: {uv}
-    Батарея: {battery} В
-    Координаты: {lat}, {lng}
-    Время: {timestamp}
+Входные данные (сырые показания):
+Температура: {temp} °C
+MQ-135 (усл. ед.): {mq135}
+УФ-индекс: {uv}
+Координаты: {lat}, {lng}
+Время: {timestamp}
 
-    ---
+---
 
-    Логика анализа:
+Логика анализа:
 
-    Температура (ощущение):
-    - меньше 0 → очень холодно
-    - 0–10 → холодно
-    - 10–18 → прохладно
-    - 18–25 → комфортно
-    - 25–32 → тепло
-    - больше 32 → жарко
+Температура (ощущение):
+- меньше 0 → очень холодно
+- 0–10 → холодно
+- 10–18 → прохладно
+- 18–25 → комфортно
+- 25–32 → тепло
+- больше 32 → жарко
 
-    MQ-35 (воздух):
-    - меньше или равно 1.5 → норма
-    - больше 1.5 → возможны загрязнения
+MQ-135 (воздух):
+- меньше или равно 1.5 → норма
+- больше 1.5 → возможны загрязнения
 
-    УФ-индекс:
-    - 0–2 → низкий (защита не требуется)
-    - 3–5 → средний (желательна защита)
-    - 6–7 → высокий (обязательна защита)
-    - 8 и выше → очень высокий (избегать солнца)
+УФ-индекс:
+- 0–2 → низкий (защита не требуется)
+- 3–5 → средний (желательна защита)
+- 6–7 → высокий (обязательна защита)
+- 8 и выше → очень высокий (избегать солнца)
 
-    Батарея:
-    - меньше 3.3 В → критически низкий заряд
-    - 3.3–3.6 → низкий
-    - больше 3.6 → норма
+Координаты:
+- Если latitude = 0 или null, или longitude = 0 или null → регион = "не определён"
+- Иначе:
+   |lat| < 23 → тропики
+   23–40 → субтропики
+   40–60 → умеренный пояс
+   >60 → холодный пояс
 
-    Координаты (упрощённо по широте):
-    - |lat| меньше 23 → тропики
-    - 23–40 → субтропики
-    - 40–60 → умеренный пояс
-    - больше 60 → холодный пояс
+---
 
-    ---
+ФОРМАТ ОТВЕТА (СТРОГО):
 
-    Дополнительный анализ:
-    - Выяви аномалии (например: высокая температура + плохой воздух)
-    - Оцени безопасность нахождения на улице
-    - Делай вывод как человек, а не как датчик
+🌡️ Температура: (оценка)
+💨 Воздух: (норма / загрязнение)
+☀️ УФ: (уровень) — (рекомендация)
+📍 Регион: (пояс)
 
-    ---
+📝 Вывод: (3-4 поясняющих предложения)
 
-    ФОРМАТ ОТВЕТА (СТРОГО):
+---
 
-    🧠 Анализ:
-
-    🌡️ Температура: (оценка)
-    💨 Воздух: (норма / загрязнение)
-    ☀️ УФ: (уровень) — (рекомендация)
-    🔋 Батарея: (статус)
-    📍 Регион: (пояс)
-
-    📝 Вывод: (1–2 коротких предложения)
-
-    ---
-
-    ЖЁСТКИЕ ПРАВИЛА:
-    - Не добавляй ничего вне формата
-    - Не используй markdown (звёздочки, решётки и т.д.)
-    - Не объясняй расчёты
-    - Если значение равно "—" → пропусти строку полностью
-    - Максимум конкретики, минимум воды
-    - Пиши на русском языке
+ЖЁСТКИЕ ПРАВИЛА:
+- Не добавляй ничего вне формата
+- Не используй markdown (звёздочки, решётки и т.д.)
+- Не объясняй расчёты
+- Если значение "—" → пропусти строку полностью
+- Максимум конкретики, минимум воды
+- Пиши на русском языке
     """
-
     try:
-        headers = {
-            "Authorization": f"Bearer {deepseek_api}",
-            "Content-Type": "application/json"
-        }
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=ai_api
+        )
 
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b:free",
+            messages=[
                 {"role": "system", "content": "Ты метеоролог. Отвечай кратко, по делу, без лишнего."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.7,
-            "max_tokens": 200
-        }
-
-        response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=15
+            temperature=0.7,
+            max_tokens=400,
         )
-
-        if response.status_code == 200:
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
-        else:
-            print(f"Ошибка DeepSeek: {response.status_code}")
-            return "🤖 AI временно недоступен"
+        return response.choices[0].message.content
 
     except Exception as e:
-        print(f"Ошибка при запросе к DeepSeek: {e}")
-        return "🤖 Ошибка соединения с AI"
+        print(f"Ошибка при запросе к NVIDIA/OpenRouter: {e}")
+        return "🤖 Анализ временно недоступен."
 
 
 @bot.message_handler(commands=["data"])
@@ -184,11 +166,10 @@ def data_command(message):
 
     response = (
         "🌊 **Метеорологический буй**\n\n"
-        f"🕒 {data.get('Timestamp', 'N/A')}\n\n"
+        f"🕒**Время: **{fix_time(data.get('Timestamp', 'N/A'))}\n\n"
         f"🌡️ **Температура:** {data.get('Temperature', 'N/A')}°C\n"
-        f"💨 **MQ-35:** {data.get('MQ35', 'N/A')}\n"
+        f"💨 **MQ-135(качество воздуха):** {data.get('MQ135', 'N/A')}\n"
         f"☀️ **UV:** {data.get('UV', 'N/A')}\n"
-        f"🔋 **Батарея:** {data.get('Battery', 'N/A')} В\n"
     )
 
     lat = data.get('Latitude')
@@ -196,7 +177,7 @@ def data_command(message):
     if lat and lng and lat != '' and lng != '':
         response += f"🛰️ **GPS:** {lat}, {lng}\n"
 
-    response += f"\n🧠 **Анализ нейросети:**\n{ai_analysis}"
+    response += f"\n🧠 **Анализ нейросети:**\n\n{ai_analysis}"
 
     bot.send_message(
         message.chat.id,
@@ -210,7 +191,8 @@ def start(message):
     markup = types.ReplyKeyboardMarkup()
     btn1 = types.KeyboardButton("/data")
     btn2 = types.KeyboardButton("/help")
-    markup.add(btn1, btn2)
+    markup.row(btn1)
+    markup.row(btn2)
     bot.send_message(message.chat.id, f"Привет {message.from_user.first_name} {message.from_user.last_name}"
                                       f", это — 🌊 Метеорологический буй AI. \n \n"
                                       "📡/data — погода + AI-анализ \n"
@@ -233,15 +215,14 @@ def help_command(message):
 
         "📡 **Используемые датчики:**\n"
         "├ 🌡️ DS18B20 — температура воды/воздуха\n"
-        "├ 💨 MQ-35 — качество воздуха / газоанализатор\n"
+        "├ 💨 MQ-135 — качество воздуха / газоанализатор\n"
         "├ ☀️ UV — уровень ультрафиолета\n"
-        "├ 🔋 Battery — контроль заряда\n"
         "└ 🛰️ GPS — координаты местоположения\n\n"
 
         "📊 **Куда передаются данные:**\n"
         "├ 📁 Google Sheets — архив показаний\n"
         "├ 🤖 Telegram‑бот — доступ в реальном времени\n"
-        "└ 🧠 DeepSeek AI — анализ погоды\n\n"
+        "└ 🧠 Nemotron AI(nvidia) — анализ погоды\n\n"
 
         "📌 **Команды бота:**\n"
         "├ /start — приветствие\n"
