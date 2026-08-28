@@ -146,7 +146,7 @@ MQ-135 (воздух):
         return response.choices[0].message.content
 
     except Exception as e:
-        print(f"Ошибка при запросе к NVIDIA/OpenRouter: {e}")
+        print(f"Ошибка при запросе к OpenAI/OpenRouter: {e}")
         return "🤖 Анализ временно недоступен."
 
 
